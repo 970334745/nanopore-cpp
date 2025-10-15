@@ -6,6 +6,11 @@
 #include <functional>
 #include <iostream>
 
+// Ensure M_PI is available on MSVC where it's not defined by default
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 namespace Analysis {
 
 // SpectralAnalyzer的PIMPL实现
