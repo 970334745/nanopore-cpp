@@ -4,6 +4,7 @@
 #include <thread>
 #include <mutex>
 #include <numeric>
+#include <cmath>
 
 namespace DataProcessor {
 
