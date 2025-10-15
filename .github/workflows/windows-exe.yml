@@ -23,11 +23,7 @@ jobs:
         uses: jurplel/install-qt-action@v3
         with:
           version: '6.6.3'
-          host: 'windows'
-          target: 'desktop'
-          arch: 'win64_msvc2022_64'
           modules: 'qtcharts'
-          cache: true
 
       - name: Configure (MSVC 2022 x64)
         shell: pwsh
