@@ -1,0 +1,29 @@
+# IDE & environment
+.idea/
+.vscode/
+.venv/
+__pycache__/
+*.pyc
+
+# Build outputs
+纳米孔/cpp_port/build/
+纳米孔/cpp_port/build/*
+
+# Local logs
+*.log
+
+# Platform binaries & artifacts
+*.exe
+*.dll
+*.pyd
+*.dylib
+*.so
+*.zip
+
+# Legacy large folder (not needed for CI build)
+EDA/
+
+# Python temp
+*.egg-info/
+dist/
+build/
