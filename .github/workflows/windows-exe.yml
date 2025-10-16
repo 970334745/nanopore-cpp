@@ -25,26 +25,26 @@ jobs:
           version: '6.6.3'
           modules: 'qtcharts'
 
-      - name: Configure (MSVC 2022 x64)
+      - name: Configure (Ninja + MSVC Release)
         shell: pwsh
         run: |
           $cmakePrefix = "$Env:QTDIR\lib\cmake"
-          cmake -S "纳米孔/cpp_port" -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="$cmakePrefix"
+          cmake -S "纳米孔/cpp_port" -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$cmakePrefix" -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF -DCMAKE_CXX_FLAGS_RELEASE="/Z7 /FS"
 
       - name: Build (Release)
         shell: pwsh
-        run: cmake --build build --config Release -j
+        run: cmake --build build -j 2
 
       - name: Deploy with windeployqt
         shell: pwsh
         run: |
           $qtbin = "$Env:QTDIR\bin"
-          & "$qtbin\windeployqt.exe" --release build\Release\nanopore_cpp.exe
+          & "$qtbin\windeployqt.exe" --release build\nanopore_cpp.exe
 
       - name: Package artifact
         shell: pwsh
         run: |
-          Compress-Archive -Path build\Release\* -DestinationPath nanopore_cpp_windows.zip
+          Compress-Archive -Path build\* -DestinationPath nanopore_cpp_windows.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
