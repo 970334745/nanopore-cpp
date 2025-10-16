@@ -44,8 +44,15 @@ jobs:
       - name: Deploy with windeployqt
         shell: pwsh
         run: |
-          $qtbin = "$Env:QTDIR\bin"
-          & "$qtbin\windeployqt.exe" --release build\nanopore_cpp.exe
+          $wdq = (Get-Command windeployqt.exe -ErrorAction SilentlyContinue)?.Path
+          if (-not $wdq) {
+            $wdq = Get-ChildItem -Path 'D:\a\nanopore-cpp' -Recurse -Filter 'windeployqt.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $wdq) {
+            $wdq = Get-ChildItem -Path $Env:RUNNER_TEMP -Recurse -Filter 'windeployqt.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $wdq) { throw "windeployqt.exe not found" }
+          & $wdq --release build\nanopore_cpp.exe
 
       - name: Package artifact
         shell: pwsh
