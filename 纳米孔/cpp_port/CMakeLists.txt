@@ -60,6 +60,11 @@ target_include_directories(nanopore_cpp PRIVATE
 
 target_link_libraries(nanopore_cpp PRIVATE Qt6::Widgets Qt6::Core Qt6::Gui Qt6::Charts)
 
+if(WIN32)
+    # MSVC 默认不定义 M_PI 等常量；启用 _USE_MATH_DEFINES 以从 <cmath>/<math.h> 暴露这些宏
+    target_compile_definitions(nanopore_cpp PRIVATE _USE_MATH_DEFINES)
+endif()
+
 if(APPLE)
     # Ensure Qt frameworks are found at runtime
     set_target_properties(nanopore_cpp PROPERTIES MACOSX_BUNDLE TRUE)
