@@ -3,6 +3,8 @@
 #include <regex>
 #include <random>
 #include <thread>
+#include <mutex>
+#include <atomic>
 #include <map>
 #include <filesystem>
 #include <cstdio>
