@@ -9,7 +9,8 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
 # Qt6 (brew install qt)
-find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui Charts)
+# 增加 Network 以支持基于 QTcpSocket 的 SCPI/TSP 传输
+find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui Charts Network)
 
 set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
@@ -58,7 +59,7 @@ target_include_directories(nanopore_cpp PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../代码/c++
 )
 
-target_link_libraries(nanopore_cpp PRIVATE Qt6::Widgets Qt6::Core Qt6::Gui Qt6::Charts)
+target_link_libraries(nanopore_cpp PRIVATE Qt6::Widgets Qt6::Core Qt6::Gui Qt6::Charts Qt6::Network)
 
 if(WIN32)
     # MSVC 默认不定义 M_PI 等常量；启用 _USE_MATH_DEFINES 以从 <cmath>/<math.h> 暴露这些宏
@@ -81,3 +82,16 @@ if(APPLE)
     # Ensure Qt frameworks are found at runtime
     set_target_properties(nanopore_cpp PROPERTIES MACOSX_BUNDLE TRUE)
 endif()
+
+# 控制台 SCPI 冒烟测试，可用于 CI 与本地验证（无需真实设备）
+add_executable(scpi_smoke_test
+    ${SRC_DIR}/tools/ScpiSmokeTest.cpp
+    ${SRC_DIR}/hardware/ScpiCommunication.cpp
+)
+
+target_include_directories(scpi_smoke_test PRIVATE
+    ${SRC_DIR}
+    ${SRC_DIR}/hardware
+)
+
+target_link_libraries(scpi_smoke_test PRIVATE Qt6::Core Qt6::Network)

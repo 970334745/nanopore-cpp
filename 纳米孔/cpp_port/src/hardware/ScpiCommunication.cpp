@@ -5,14 +5,38 @@
 #include <thread>
 #include <chrono>
 #include <regex>
+#include <cstdlib>
+
+// Qt 模块化包含与条件编译（适配不同安装布局）
+#if __has_include(<QtNetwork/QTcpSocket>)
+#  include <QtNetwork/QTcpSocket>
+#  define HAS_QT_NETWORK 1
+#else
+#  define HAS_QT_NETWORK 0
+#endif
+
+#include <QtCore/QByteArray>
+#include <QtCore/QString>
+#include <QtCore/QStringList>
+#include <QtCore/QRegularExpression>
+#include <QtCore/QElapsedTimer>
+#include <QtCore/qglobal.h>
+#include <QtCore/Qt>
 
 // PIMPL实现结构
 struct ScpiCommunication::Impl {
+    enum class Transport { Sim, TCP };
     std::string currentResource;
     bool resourceOpen;
     double timeoutMs;
     ErrorCallback errorCallback;
     ResponseCallback responseCallback;
+    Transport transport;
+#if HAS_QT_NETWORK
+    std::unique_ptr<QTcpSocket> tcpSocket;
+#endif
+    std::string tcpHost;
+    int tcpPort;
     
     // 模拟VISA资源列表
     std::vector<std::string> availableResources;
@@ -26,7 +50,7 @@ struct ScpiCommunication::Impl {
     
     Impl() : resourceOpen(false), timeoutMs(5000.0), outputEnabled(false),
              currentVoltage(0.0), currentLimit(0.001), currentRange(0.001),
-             continuousMeasurement(false) {
+             continuousMeasurement(false), transport(Transport::Sim), tcpPort(5025) {
         // 初始化可用资源列表
         availableResources = {
             "USB0::0x05E6::0x2450::04123456::INSTR",  // Keithley 2450
@@ -52,6 +76,19 @@ std::vector<std::string> ScpiCommunication::findResources() {
     // 模拟资源扫描延迟
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     
+    // 从环境变量追加资源列表（以逗号或分号分隔）
+    const char* env = std::getenv("SCPI_RESOURCES");
+    if (env && *env) {
+        QString raw = QString::fromUtf8(env);
+        QStringList parts = raw.split(QRegularExpression("[;,]"), Qt::SkipEmptyParts);
+        for (const QString& p : parts) {
+            std::string s = p.trimmed().toStdString();
+            if (!s.empty()) {
+                pImpl_->availableResources.push_back(s);
+            }
+        }
+    }
+
     std::cout << "发现 " << pImpl_->availableResources.size() << " 个VISA资源" << std::endl;
     return pImpl_->availableResources;
 }
@@ -61,30 +98,73 @@ bool ScpiCommunication::openResource(const std::string& resourceString) {
         closeResource();
     }
     
-    // 检查资源是否在可用列表中
-    auto it = std::find(pImpl_->availableResources.begin(), 
-                       pImpl_->availableResources.end(), resourceString);
-    
-    if (it == pImpl_->availableResources.end()) {
-        handleError("资源不存在: " + resourceString, -1);
-        return false;
-    }
-    
     pImpl_->currentResource = resourceString;
+    
+    // TCPIP 资源：解析并建立 socket 连接
+    if (resourceString.rfind("TCPIP", 0) == 0) {
+        // 示例: TCPIP0::192.168.1.100::inst0::INSTR 或 TCPIP0::host::5025::SOCKET
+        QString res = QString::fromStdString(resourceString);
+        QStringList parts = res.split("::", Qt::SkipEmptyParts);
+        if (parts.size() >= 3) {
+            // parts[0] = TCPIP0, parts[1] = host, parts[2] = inst0 或 端口
+            pImpl_->tcpHost = parts[1].toStdString();
+            if (parts[2].startsWith("inst", Qt::CaseInsensitive)) {
+                pImpl_->tcpPort = 5025; // 通常的 SCPI 端口
+            } else {
+                bool ok = false;
+                int port = parts[2].toInt(&ok);
+                pImpl_->tcpPort = ok ? port : 5025;
+            }
+        } else {
+            handleError("TCPIP资源格式不正确: " + resourceString, -10);
+            return false;
+        }
+
+        
+#if HAS_QT_NETWORK
+        pImpl_->tcpSocket = std::make_unique<QTcpSocket>();
+        pImpl_->tcpSocket->connectToHost(QString::fromStdString(pImpl_->tcpHost), pImpl_->tcpPort);
+        if (!pImpl_->tcpSocket->waitForConnected(static_cast<int>(pImpl_->timeoutMs))) {
+            handleError("TCP连接失败: " + pImpl_->tcpHost + ":" + std::to_string(pImpl_->tcpPort), -11);
+            pImpl_->tcpSocket.reset();
+            return false;
+        }
+
+        pImpl_->transport = Impl::Transport::TCP;
+        pImpl_->resourceOpen = true;
+        std::cout << "已连接 TCPIP 设备: " << pImpl_->tcpHost << ":" << pImpl_->tcpPort << std::endl;
+        
+        // 初始化设备
+        sendCommand("*RST");
+        sendCommand("*CLS");
+        return true;
+#else
+        handleError("当前构建缺少 QtNetwork 模块，无法连接 TCPIP 设备", -11);
+        return false;
+#endif
+    }
+
+    // 其他类型暂未实现，仍按模拟处理
+    pImpl_->transport = Impl::Transport::Sim;
     pImpl_->resourceOpen = true;
-    
-    std::cout << "成功打开VISA资源: " << resourceString << std::endl;
-    
-    // 发送初始化命令
-    sendCommand("*RST");  // 重置设备
-    sendCommand("*CLS");  // 清除错误
-    
+    std::cout << "以模拟模式打开资源: " << resourceString << std::endl;
+    sendCommand("*RST");
+    sendCommand("*CLS");
     return true;
 }
 
 void ScpiCommunication::closeResource() {
     if (pImpl_->resourceOpen) {
-        std::cout << "关闭VISA资源: " << pImpl_->currentResource << std::endl;
+        std::cout << "关闭资源: " << pImpl_->currentResource << std::endl;
+        if (pImpl_->transport == Impl::Transport::TCP) {
+#if HAS_QT_NETWORK
+            if (pImpl_->tcpSocket) {
+                pImpl_->tcpSocket->disconnectFromHost();
+                pImpl_->tcpSocket->close();
+                pImpl_->tcpSocket.reset();
+            }
+#endif
+        }
         pImpl_->resourceOpen = false;
         pImpl_->currentResource.clear();
     }
@@ -391,22 +471,17 @@ bool ScpiCommunication::validateCommand(const std::string& command) {
         return false;
     }
     
-    // 基本的SCPI命令格式验证
-    std::regex scpiPattern(R"([A-Z*:?0-9\.\-\s\"]+)", std::regex_constants::icase);
-    return std::regex_match(command, scpiPattern);
+    // 宽松的命令验证：允许可打印 ASCII（兼容 SCPI 与 TSP/Lua 表达式）
+    std::regex printableAscii(R"([^\x00-\x1F\x7F]+)");
+    return std::regex_match(command, printableAscii);
 }
 
 std::string ScpiCommunication::formatCommand(const std::string& command) {
     std::string formatted = command;
-    
-    // 转换为大写
-    std::transform(formatted.begin(), formatted.end(), formatted.begin(), ::toupper);
-    
-    // 确保命令以换行符结束
+    // 不改变大小写，避免破坏 TSP/Lua 变量名（如 smua）
     if (!formatted.empty() && formatted.back() != '\n') {
         formatted += '\n';
     }
-    
     return formatted;
 }
 
@@ -429,52 +504,99 @@ ScpiResult ScpiCommunication::executeCommand(const std::string& command, bool ex
     
     std::string formattedCommand = formatCommand(command);
     
-    // 模拟命令执行
-    std::cout << "发送SCPI命令: " << command << std::endl;
-    
-    // 模拟执行延迟
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    
-    if (expectResponse) {
-        // 生成模拟响应
-        if (command.find("*IDN?") != std::string::npos) {
-            if (pImpl_->currentResource.find("2450") != std::string::npos) {
-                result.response = "KEITHLEY INSTRUMENTS INC.,MODEL 2450,04123456,1.0.0";
-            } else if (pImpl_->currentResource.find("2460") != std::string::npos) {
-                result.response = "KEITHLEY INSTRUMENTS INC.,MODEL 2460,04123457,1.0.0";
-            } else if (pImpl_->currentResource.find("6487") != std::string::npos) {
-                result.response = "KEITHLEY INSTRUMENTS INC.,MODEL 6487,04123458,1.0.0";
-            } else {
-                result.response = "UNKNOWN MANUFACTURER,UNKNOWN MODEL,00000000,1.0.0";
-            }
-        } else if (command.find("SOUR:VOLT?") != std::string::npos) {
-            result.response = std::to_string(pImpl_->currentVoltage);
-        } else if (command.find("MEAS:CURR?") != std::string::npos) {
-            double current = pImpl_->outputEnabled ? (pImpl_->currentVoltage * 1e-9) : 0.0;
-            result.response = std::to_string(current);
-        } else if (command.find("OUTP?") != std::string::npos) {
-            result.response = pImpl_->outputEnabled ? "1" : "0";
-        } else if (command.find("SYST:ERR?") != std::string::npos) {
-            result.response = "0,\"No error\"";
-        } else if (command.find("*TST?") != std::string::npos) {
-            result.response = "0";  // 自检通过
-        } else {
-            result.response = "OK";
+    // 真实 TCP 传输路径
+    if (pImpl_->transport == Impl::Transport::TCP) {
+#if HAS_QT_NETWORK
+        if (!pImpl_->tcpSocket) {
+            result.errorMessage = "TCP 连接未建立";
+            result.errorCode = -12;
+            handleError(result.errorMessage, result.errorCode);
+            return result;
+        }
+        std::cout << "发送SCPI/TSP: " << command << std::endl;
+        QByteArray out = QByteArray::fromStdString(formattedCommand);
+        qint64 written = pImpl_->tcpSocket->write(out);
+        if (written != out.size() && !pImpl_->tcpSocket->waitForBytesWritten(static_cast<int>(pImpl_->timeoutMs))) {
+            result.errorMessage = "写入失败或超时";
+            result.errorCode = -12;
+            handleError(result.errorMessage, result.errorCode);
+            return result;
         }
         
-        std::cout << "接收响应: " << result.response << std::endl;
+        if (expectResponse) {
+            QByteArray buf;
+            QElapsedTimer timer; timer.start();
+            while (timer.elapsed() < static_cast<qint64>(pImpl_->timeoutMs)) {
+                if (pImpl_->tcpSocket->waitForReadyRead(100)) {
+                    buf.append(pImpl_->tcpSocket->readAll());
+                    if (buf.contains('\n')) break; // 简单以换行终止
+                }
+            }
+            if (buf.isEmpty()) {
+                result.errorMessage = "读取响应超时或为空";
+                result.errorCode = -13;
+                handleError(result.errorMessage, result.errorCode);
+                return result;
+            }
+            // 去掉末尾换行/回车
+            std::string resp = buf.toStdString();
+            while (!resp.empty() && (resp.back() == '\n' || resp.back() == '\r')) resp.pop_back();
+            result.response = resp;
+            std::cout << "接收响应: " << result.response << std::endl;
+        }
+        result.success = true;
+        if (pImpl_->responseCallback) {
+            pImpl_->responseCallback(command, result.response);
+        }
+        logCommunication(command, result.response);
+        return result;
+#else
+        result.errorMessage = "QtNetwork 不可用，无法进行 TCP 传输";
+        result.errorCode = -15;
+        handleError(result.errorMessage, result.errorCode);
+        return result;
+#endif
     }
-    
-    result.success = true;
-    
-    // 调用响应回调
-    if (pImpl_->responseCallback) {
-        pImpl_->responseCallback(command, result.response);
+
+    // 回退到模拟路径
+    {
+        // 模拟命令执行
+        std::cout << "发送SCPI命令(模拟): " << command << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (expectResponse) {
+            if (command.find("*IDN?") != std::string::npos) {
+                if (pImpl_->currentResource.find("2450") != std::string::npos) {
+                    result.response = "KEITHLEY INSTRUMENTS INC.,MODEL 2450,04123456,1.0.0";
+                } else if (pImpl_->currentResource.find("2460") != std::string::npos) {
+                    result.response = "KEITHLEY INSTRUMENTS INC.,MODEL 2460,04123457,1.0.0";
+                } else if (pImpl_->currentResource.find("6487") != std::string::npos) {
+                    result.response = "KEITHLEY INSTRUMENTS INC.,MODEL 6487,04123458,1.0.0";
+                } else {
+                    result.response = "UNKNOWN MANUFACTURER,UNKNOWN MODEL,00000000,1.0.0";
+                }
+            } else if (command.find("SOUR:VOLT?") != std::string::npos) {
+                result.response = std::to_string(pImpl_->currentVoltage);
+            } else if (command.find("MEAS:CURR?") != std::string::npos) {
+                double current = pImpl_->outputEnabled ? (pImpl_->currentVoltage * 1e-9) : 0.0;
+                result.response = std::to_string(current);
+            } else if (command.find("OUTP?") != std::string::npos) {
+                result.response = pImpl_->outputEnabled ? "1" : "0";
+            } else if (command.find("SYST:ERR?") != std::string::npos) {
+                result.response = "0,\"No error\"";
+            } else if (command.find("*TST?") != std::string::npos) {
+                result.response = "0";
+            } else {
+                result.response = "OK";
+            }
+            std::cout << "接收响应(模拟): " << result.response << std::endl;
+        }
+        result.success = true;
+        if (pImpl_->responseCallback) {
+            pImpl_->responseCallback(command, result.response);
+        }
+        logCommunication(command, result.response);
+        return result;
     }
-    
-    logCommunication(command, result.response);
-    
-    return result;
 }
 
 void ScpiCommunication::handleError(const std::string& message, int code) {
