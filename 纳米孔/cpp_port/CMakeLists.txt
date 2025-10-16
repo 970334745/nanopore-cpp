@@ -65,6 +65,16 @@ if(WIN32)
     target_compile_definitions(nanopore_cpp PRIVATE _USE_MATH_DEFINES)
 endif()
 
+# MSVC-specific stability tweaks for Release builds
+if(MSVC)
+    # Avoid CL.exe ICE around Type Server PDB by using embedded debug info
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Release>:Embedded>;$<$<CONFIG:Debug>:ProgramDatabase>;$<$<CONFIG:RelWithDebInfo>:ProgramDatabase>")
+    # Force synchronized PDB writes when parallel building
+    target_compile_options(nanopore_cpp PRIVATE $<$<CONFIG:Release>:/FS> $<$<CONFIG:Release>:/Z7>)
+    # Disable IPO/LTCG to prevent "Generating code" stage crashes on CI
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
+endif()
+
 if(APPLE)
     # Ensure Qt frameworks are found at runtime
     set_target_properties(nanopore_cpp PROPERTIES MACOSX_BUNDLE TRUE)
