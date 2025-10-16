@@ -25,6 +25,12 @@ jobs:
           version: '6.6.3'
           modules: 'qtcharts'
 
+      - name: Setup MSVC Dev Command
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+          vsversion: '2022'
+
       - name: Configure (Ninja + MSVC Release)
         shell: pwsh
         run: |
