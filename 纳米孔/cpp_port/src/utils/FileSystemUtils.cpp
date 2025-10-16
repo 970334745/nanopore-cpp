@@ -4,171 +4,157 @@
 #include <random>
 #include <thread>
 #include <map>
-#include <sys/stat.h>
-#include <dirent.h>
+#include <filesystem>
 #include <cstdio>
-#include <unistd.h>
 
 namespace FileManager {
 namespace FileSystemUtils {
 
 bool exists(const std::string& path) {
-    struct stat buffer;
-    return (stat(path.c_str(), &buffer) == 0);
+    return std::filesystem::exists(std::filesystem::path(path));
 }
 
 bool isFile(const std::string& path) {
-    struct stat buffer;
-    if (stat(path.c_str(), &buffer) != 0) {
-        return false;
-    }
-    return S_ISREG(buffer.st_mode);
+    return std::filesystem::is_regular_file(std::filesystem::path(path));
 }
 
 bool isDirectory(const std::string& path) {
-    struct stat buffer;
-    if (stat(path.c_str(), &buffer) != 0) {
-        return false;
-    }
-    return S_ISDIR(buffer.st_mode);
+    return std::filesystem::is_directory(std::filesystem::path(path));
 }
 
 size_t getFileSize(const std::string& path) {
-    struct stat buffer;
-    if (stat(path.c_str(), &buffer) != 0) {
+    try {
+        return static_cast<size_t>(std::filesystem::file_size(std::filesystem::path(path)));
+    } catch (...) {
         return 0;
     }
-    return buffer.st_size;
 }
 
 std::string getFileExtension(const std::string& path) {
-    size_t dot_pos = path.find_last_of('.');
-    if (dot_pos == std::string::npos) {
-        return "";
-    }
-    return path.substr(dot_pos);
+    return std::filesystem::path(path).extension().string();
 }
 
 std::string getBaseName(const std::string& path) {
-    size_t slash_pos = path.find_last_of('/');
-    if (slash_pos == std::string::npos) {
-        return path;
-    }
-    return path.substr(slash_pos + 1);
+    return std::filesystem::path(path).filename().string();
 }
 
 std::string getDirectoryName(const std::string& path) {
-    size_t slash_pos = path.find_last_of('/');
-    if (slash_pos == std::string::npos) {
-        return ".";
-    }
-    return path.substr(0, slash_pos);
+    auto p = std::filesystem::path(path);
+    auto parent = p.parent_path();
+    return parent.empty() ? std::string(".") : parent.string();
 }
 
 bool createDirectory(const std::string& path) {
-    return mkdir(path.c_str(), 0755) == 0;
+    try {
+        return std::filesystem::create_directories(std::filesystem::path(path));
+    } catch (...) {
+        return false;
+    }
 }
 
 bool removeFile(const std::string& path) {
-    return std::remove(path.c_str()) == 0;
+    try {
+        return std::filesystem::remove(std::filesystem::path(path));
+    } catch (...) {
+        return false;
+    }
 }
 
 bool removeDirectory(const std::string& path, bool recursive) {
-    if (recursive) {
-        // 简化实现：只删除空目录
-        return rmdir(path.c_str()) == 0;
-    } else {
-        return rmdir(path.c_str()) == 0;
+    try {
+        if (recursive) {
+            return std::filesystem::remove_all(std::filesystem::path(path)) > 0;
+        } else {
+            return std::filesystem::remove(std::filesystem::path(path));
+        }
+    } catch (...) {
+        return false;
     }
 }
 
 bool copyFile(const std::string& source, const std::string& destination) {
-    std::ifstream src(source, std::ios::binary);
-    std::ofstream dst(destination, std::ios::binary);
-    
-    if (!src.is_open() || !dst.is_open()) {
+    try {
+        return std::filesystem::copy_file(
+            std::filesystem::path(source),
+            std::filesystem::path(destination),
+            std::filesystem::copy_options::overwrite_existing);
+    } catch (...) {
         return false;
     }
-    
-    dst << src.rdbuf();
-    return true;
 }
 
 bool moveFile(const std::string& source, const std::string& destination) {
-    return std::rename(source.c_str(), destination.c_str()) == 0;
+    try {
+        std::filesystem::rename(std::filesystem::path(source), std::filesystem::path(destination));
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 std::vector<std::string> listFiles(const std::string& directory, 
                                   const std::string& pattern, 
                                   bool recursive) {
     std::vector<std::string> files;
-    
-    DIR* dir = opendir(directory.c_str());
-    if (!dir) {
-        return files;
-    }
-    
     std::regex pattern_regex(pattern == "*" ? ".*" : pattern);
-    
-    struct dirent* entry;
-    while ((entry = readdir(dir)) != nullptr) {
-        std::string name = entry->d_name;
-        if (name == "." || name == "..") {
-            continue;
-        }
-        
-        std::string full_path = directory + "/" + name;
-        if (isFile(full_path)) {
-            if (std::regex_match(name, pattern_regex)) {
-                files.push_back(full_path);
+    try {
+        if (recursive) {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(directory)) {
+                if (entry.is_regular_file()) {
+                    const auto name = entry.path().filename().string();
+                    if (std::regex_match(name, pattern_regex)) {
+                        files.push_back(entry.path().string());
+                    }
+                }
             }
-        } else if (recursive && isDirectory(full_path)) {
-            auto sub_files = listFiles(full_path, pattern, true);
-            files.insert(files.end(), sub_files.begin(), sub_files.end());
+        } else {
+            for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+                if (entry.is_regular_file()) {
+                    const auto name = entry.path().filename().string();
+                    if (std::regex_match(name, pattern_regex)) {
+                        files.push_back(entry.path().string());
+                    }
+                }
+            }
         }
+    } catch (...) {
+        // ignore
     }
-    
-    closedir(dir);
     return files;
 }
 
 std::vector<std::string> listDirectories(const std::string& directory, 
                                         bool recursive) {
     std::vector<std::string> directories;
-    
-    DIR* dir = opendir(directory.c_str());
-    if (!dir) {
-        return directories;
-    }
-    
-    struct dirent* entry;
-    while ((entry = readdir(dir)) != nullptr) {
-        std::string name = entry->d_name;
-        if (name == "." || name == "..") {
-            continue;
-        }
-        
-        std::string full_path = directory + "/" + name;
-        if (isDirectory(full_path)) {
-            directories.push_back(full_path);
-            
-            if (recursive) {
-                auto sub_dirs = listDirectories(full_path, true);
-                directories.insert(directories.end(), sub_dirs.begin(), sub_dirs.end());
+    try {
+        if (recursive) {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(directory)) {
+                if (entry.is_directory()) {
+                    directories.push_back(entry.path().string());
+                }
+            }
+        } else {
+            for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+                if (entry.is_directory()) {
+                    directories.push_back(entry.path().string());
+                }
             }
         }
+    } catch (...) {
+        // ignore
     }
-    
-    closedir(dir);
     return directories;
 }
 
 std::string getTemporaryDirectory() {
-    const char* temp_dir = getenv("TMPDIR");
-    if (temp_dir) {
-        return std::string(temp_dir);
+    try {
+        return std::filesystem::temp_directory_path().string();
+    } catch (...) {
+        const char* tmp = getenv("TMPDIR");
+        if (!tmp) tmp = getenv("TMP");
+        if (!tmp) tmp = getenv("TEMP");
+        return tmp ? std::string(tmp) : std::string("/tmp");
     }
-    return "/tmp";
 }
 
 std::string generateTempFilename(const std::string& prefix, 
@@ -179,8 +165,7 @@ std::string generateTempFilename(const std::string& prefix,
     
     std::string temp_dir = getTemporaryDirectory();
     std::string filename = prefix + "_" + std::to_string(dis(gen)) + extension;
-    
-    return temp_dir + "/" + filename;
+    return (std::filesystem::path(temp_dir) / filename).string();
 }
 
 // FileWatcher 实现
