@@ -73,6 +73,8 @@ if(MSVC)
     target_compile_options(nanopore_cpp PRIVATE $<$<CONFIG:Release>:/FS> $<$<CONFIG:Release>:/Z7>)
     # Disable IPO/LTCG explicitly on the target to prevent CL.exe invoked at link time
     set_property(TARGET nanopore_cpp PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
+    # Disable Visual Studio Whole Program Optimization property (redundant safety)
+    set_target_properties(nanopore_cpp PROPERTIES VS_GLOBAL_EnableWholeProgramOptimization "false")
 endif()
 
 if(APPLE)
