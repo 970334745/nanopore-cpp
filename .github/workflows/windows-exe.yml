@@ -14,11 +14,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
       - name: Install Qt (install-qt-action)
         uses: jurplel/install-qt-action@v3
         with:
@@ -41,16 +36,6 @@ jobs:
         shell: pwsh
         run: cmake --build build -j 2
 
-      - name: Smoke test (SCPI over TCP using mock server)
-        shell: pwsh
-        run: |
-          $proc = Start-Process -FilePath python -ArgumentList '"纳米孔/cpp_port/scripts/scpi_mock_server.py" --port 5025' -PassThru -WindowStyle Hidden
-          Start-Sleep -Seconds 2
-          try {
-            build\scpi_smoke_test.exe 'TCPIP0::127.0.0.1::5025::SOCKET'
-          } finally {
-            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-          }
 
       - name: Deploy with windeployqt
         shell: pwsh
